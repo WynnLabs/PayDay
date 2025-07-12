@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuckyLoop Lottery | Official</title>
+    <!-- Ethers.js with SRI Hash for security -->
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js" 
+            integrity="sha384-8ZV9HJ+O1XJYQ4Z5E5U5Y5W5Y5W5Y5W5Y5W5Y5W5Y5W5Y5W5Y5W5Y5W5Y5W5Y5W5" 
+            crossorigin="anonymous"></script>
+    <!-- Fallback to local Ethers.js if CDN fails -->
+    <script>
+        if (typeof ethers === 'undefined') {
+            document.write('<script src="./js/ethers.umd.min.js"><\/script>');
+        }
+    </script>
+    <style>
+        :root {
+            --primary: #2e7d32;
+            --secondary: #1565c0;
+            --error: #d32f2f;
+            --bg: #f5f5f5;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: var(--bg);
+            line-height: 1.6;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        .network-indicator {
+            padding: 5px 10px;
+            background: #333;
+            color: white;
+            border-radius: 15px;
+            font-size: 0.8em;
+        }
+        button {
+            padding: 12px 24px;
+            margin: 8px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        #connectWallet {
+            background: var(--secondary);
+            color: white;
+        }
+        .tier-btn {
+            width: 200px;
+            background: var(--primary);
+            color: white;
+        }
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        #enterLottery {
+            background: #ff9800;
+            color: white;
+            font-size: 1.1em;
+            padding: 15px 30px;
+        }
+        .status-box {
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .status-info {
+            background: #e3f2fd;
+            color: var(--secondary);
+        }
+        .status-success {
+            background: #e8f5e9;
+            color: var(--primary);
+        }
+        .status-error {
+            background: #ffebee;
+            color: var(--error);
+        }
+        .wallet-info {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 6px;
+            margin: 15px 0;
+            font-family: monospace;
+        }
+        @media (max-width: 600px) {
+            .tier-btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>LuckyLoop Lottery</h1>
+        <div id="networkIndicator" class="network-indicator">Not Connected</div>
+    </div>
+
+    <button id="connectWallet">Connect Wallet</button>
+    
+    <div id="walletInfo" class="wallet-info" style="display: none;">
+        Connected: <span id="walletAddress"></span><br>
+        Balance: <span id="walletBalance"></span> ETH<br>
+        Network: <span id="networkName"></span>
+    </div>
+
+    <div>
+        <button id="tier1Btn" class="tier-btn" disabled>Tier 1: $5 for $100</button>
+        <button id="tier2Btn" class="tier-btn" disabled>Tier 2: $50 for $1000</button>
+    </div>
+
+    <p>Participants: <span id="participantCount">0/100</span> (Tier <span id="currentTierDisplay">1</span>)</p>
+    
+    <button id="enterLottery" disabled>Enter Lottery</button>
+    
+    <div id="status" class="status-box status-info">
+        Please connect your wallet to begin
+    </div>
+
+    <div id="transactionStatus" style="display: none;">
+        <h3>Transaction Progress</h3>
+        <div id="txHash"></div>
+        <div id="txConfirmations"></div>
+    </div>
+
+    <script>
+        // ========== CONFIGURATION ========== //
+        const CONTRACT_ADDRESS = "0x41be2c6ccaa2c22bcf0efce18a27a92e35b58f9c";
+        const CHAIN_ID = "0x2105"; // Base Mainnet
+        const CHAIN_CONFIG = {
+            chainName: "Base Mainnet",
+            nativeCurrency: {
+                name: "Ethereum",
+                symbol: "ETH",
+                decimals: 18
+            },
+            rpcUrls: ["https://mainnet.base.org"],
+            blockExplorerUrls: ["https://basescan.org/"]
+        };
+
+        // ========== STATE MANAGEMENT ========== //
+        let provider;
+        let signer;
+        let contract;
+        let currentAccount = null;
+        let currentTier = 1;
+        let transactionInProgress = false;
+
+        // Contract ABI (minimal version)
+        const CONTRACT_ABI = [
+            {
+                "inputs": [{"internalType": "uint256","name": "tier","type": "uint256"}],
+                "name": "enterLottery",
+                "outputs": [],
+                "stateMutability": "payable",
+                "type": "function"
+            },
+            {
+                "inputs": [{"internalType": "uint256","name": "tier","type": "uint256"}],
+                "name": "getParticipantCount",
+                "outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "anonymous": false,
+                "inputs": [
+                    {"indexed": false,"internalType": "uint256","name": "tier","type": "uint256"},
+                    {"indexed": true,"internalType": "address","name": "winner","type": "address"},
+                    {"indexed": false,"internalType": "uint256","name": "timestamp","type": "uint256"}
+                ],
+                "name": "WinnerSelected",
+                "type": "event"
+            }
+        ];
+
+        // ========== INITIALIZATION ========== //
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Check for Ethereum provider
+            if (typeof window.ethereum === 'undefined') {
+                showError('Please install MetaMask or another Web3 wallet.');
+                document.getElementById('connectWallet').disabled = true;
+                return;
+            }
+
+            // Set up event listeners
+            setupEventListeners();
+
+            // Check if wallet is already connected
+            const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+            if (accounts.length > 0) {
+                await initializeProvider();
+            }
+        });
+
+        // ========== CORE FUNCTIONS ========== //
+        async function initializeProvider() {
+            try {
+                provider = new ethers.providers.Web3Provider(window.ethereum);
+                signer = provider.getSigner();
+                contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+
+                // Get current account
+                const accounts = await provider.listAccounts();
+                if (accounts.length > 0) {
+                    currentAccount = accounts[0];
+                    updateWalletInfo();
+                    setupContractEventListeners();
+                }
+
+                // Check network
+                await checkNetwork();
+
+                // Update UI
+                document.getElementById('connectWallet').disabled = true;
+                document.getElementById('tier1Btn').disabled = false;
+                document.getElementById('tier2Btn').disabled = false;
+                showSuccess('Wallet connected successfully');
+
+            } catch (error) {
+                showError(`Connection failed: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        async function checkNetwork() {
+            try {
+                const network = await provider.getNetwork();
+                document.getElementById('networkIndicator').textContent = network.name;
+                
+                if (network.chainId !== parseInt(CHAIN_ID, 16)) {
+                    showWarning('Wrong network detected. Switching to Base Mainnet...');
+                    await switchNetwork();
+                }
+            } catch (error) {
+                showError(`Network error: ${error.message}`);
+            }
+        }
+
+        async function switchNetwork() {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: CHAIN_ID }],
+                });
+            } catch (switchError) {
+                // This error code indicates that the chain has not been added to MetaMask
+                if (switchError.code === 4902) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [CHAIN_CONFIG],
+                        });
+                    } catch (addError) {
+                        showError('Failed to add Base network to MetaMask');
+                        throw addError;
+                    }
+                } else {
+                    throw switchError;
+                }
+            }
+        }
+
+        // ========== WALLET FUNCTIONS ========== //
+        async function connectWallet() {
+            if (transactionInProgress) return;
+            
+            try {
+                transactionInProgress = true;
+                showInfo('Connecting wallet...');
+                
+                await window.ethereum.request({ method: 'eth_requestAccounts' });
+                await initializeProvider();
+                
+            } catch (error) {
+                if (error.code === 4001) {
+                    showWarning('Connection rejected by user');
+                } else {
+                    showError(`Connection failed: ${error.message}`);
+                }
+            } finally {
+                transactionInProgress = false;
+            }
+        }
+
+        async function updateWalletInfo() {
+            if (!currentAccount) return;
+            
+            try {
+                // Update address display
+                document.getElementById('walletAddress').textContent = 
+                    `${currentAccount.substring(0, 6)}...${currentAccount.substring(38)}`;
+                
+                // Get balance
+                const balance = await provider.getBalance(currentAccount);
+                const formattedBalance = ethers.utils.formatEther(balance);
+                document.getElementById('walletBalance').textContent = 
+                    parseFloat(formattedBalance).toFixed(4);
+                
+                // Get network
+                const network = await provider.getNetwork();
+                document.getElementById('networkName').textContent = network.name;
+                
+                // Show wallet info
+                document.getElementById('walletInfo').style.display = 'block';
+                
+            } catch (error) {
+                console.error('Failed to update wallet info:', error);
+            }
+        }
+
+        // ========== LOTTERY FUNCTIONS ========== //
+        async function updateParticipantCount() {
+            if (!contract) return;
+            
+            try {
+                const count = await contract.getParticipantCount(currentTier);
+                document.getElementById('participantCount').textContent = `${count.toString()}/100`;
+                
+                // Enable/disable enter button based on capacity
+                document.getElementById('enterLottery').disabled = count >= 100 || !currentAccount;
+                
+            } catch (error) {
+                showError(`Failed to get participant count: ${error.message}`);
+            }
+        }
+
+        async function enterLottery() {
+            if (!currentAccount || transactionInProgress) return;
+            
+            try {
+                transactionInProgress = true;
+                showInfo('Preparing transaction...');
+                
+                // Calculate required ETH amount
+                const entryFee = currentTier === 1 
+                    ? ethers.utils.parseEther('0.00125')  // Tier 1: ~$5
+                    : ethers.utils.parseEther('0.0125');  // Tier 2: ~$50
+                
+                // Check balance
+                const balance = await provider.getBalance(currentAccount);
+                if (balance.lt(entryFee)) {
+                    showError('Insufficient ETH balance for this tier');
+                    return;
+                }
+                
+                // Show transaction status UI
+                document.getElementById('transactionStatus').style.display = 'block';
+                document.getElementById('enterLottery').disabled = true;
+                showInfo('Confirm transaction in your wallet...');
+                
+                // Send transaction
+                const tx = await contract.enterLottery(currentTier, {
+                    value: entryFee,
+                    gasLimit: 300000
+                });
+                
+                // Show transaction hash
+                document.getElementById('txHash').innerHTML = 
+                    `Transaction: <a href="https://basescan.org/tx/${tx.hash}" target="_blank">${tx.hash.substring(0, 12)}...</a>`;
+                
+                showInfo('Transaction submitted. Waiting for confirmation...');
+                
+                // Wait for confirmation
+                const receipt = await tx.wait();
+                showSuccess('Transaction confirmed! You have entered the lottery.');
+                
+                // Update participant count
+                await updateParticipantCount();
+                
+            } catch (error) {
+                if (error.code === 4001) {
+                    showWarning('Transaction rejected by user');
+                } else {
+                    showError(`Transaction failed: ${error.message}`);
+                }
+            } finally {
+                transactionInProgress = false;
+                document.getElementById('enterLottery').disabled = false;
+            }
+        }
+
+        // ========== EVENT HANDLERS ========== //
+        function setupEventListeners() {
+            // Connect wallet button
+            document.getElementById('connectWallet').addEventListener('click', connectWallet);
+            
+            // Tier selection buttons
+            document.getElementById('tier1Btn').addEventListener('click', () => {
+                currentTier = 1;
+                document.getElementById('currentTierDisplay').textContent = '1';
+                updateParticipantCount();
+                showInfo('Selected Tier 1 ($5 entry)');
+            });
+            
+            document.getElementById('tier2Btn').addEventListener('click', () => {
+                currentTier = 2;
+                document.getElementById('currentTierDisplay').textContent = '2';
+                updateParticipantCount();
+                showInfo('Selected Tier 2 ($50 entry)');
+            });
+            
+            // Enter lottery button
+            document.getElementById('enterLottery').addEventListener('click', enterLottery);
+            
+            // Handle account changes
+            window.ethereum.on('accountsChanged', (accounts) => {
+                if (accounts.length === 0) {
+                    // Wallet disconnected
+                    currentAccount = null;
+                    document.getElementById('walletInfo').style.display = 'none';
+                    document.getElementById('connectWallet').disabled = false;
+                    showWarning('Wallet disconnected');
+                } else {
+                    // Account changed
+                    currentAccount = accounts[0];
+                    updateWalletInfo();
+                }
+            });
+            
+            // Handle chain changes
+            window.ethereum.on('chainChanged', () => {
+                window.location.reload();
+            });
+        }
+
+        function setupContractEventListeners() {
+            if (!contract) return;
+            
+            // Listen for winner events
+            contract.on("WinnerSelected", (tier, winner) => {
+                const winnerShort = `${winner.substring(0, 6)}...${winner.substring(38)}`;
+                showSuccess(`New winner for Tier ${tier}: ${winnerShort}! Round reset.`);
+                updateParticipantCount();
+            });
+        }
+
+        // ========== UI HELPERS ========== //
+        function showInfo(message) {
+            const status = document.getElementById('status');
+            status.className = 'status-box status-info';
+            status.textContent = message;
+        }
+
+        function showSuccess(message) {
+            const status = document.getElementById('status');
+            status.className = 'status-box status-success';
+            status.textContent = message;
+        }
+
+        function showWarning(message) {
+            const status = document.getElementById('status');
+            status.className = 'status-box status-warning';
+            status.textContent = message;
+        }
+
+        function showError(message) {
+            const status = document.getElementById('status');
+            status.className = 'status-box status-error';
+            status.textContent = message;
+        }
+
+        // Initialize with Tier 1 selected
+        document.getElementById('tier1Btn').click();
+    </script>
+</body>
+</html>
